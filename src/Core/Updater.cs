@@ -24,11 +24,11 @@ namespace DiskGuard
 
     public static class Updater
     {
-        public const string CurrentVersion = "9.0.3";
+        public const string CurrentVersion = "9.0.4";
         public const string CurrentReleaseNotes =
-            "• PowerShell 7 卡片新增「一键设为默认终端」：自动备份原配置并切换 Windows Terminal 以及已安装的 VS Code / Cursor 默认终端为 PowerShell 7，绝不触碰系统内置 5.1\n" +
-            "• 深度重构「桌面图标变白纸」修复引擎（.lnk 图标路径自动修复 + 失靶诊断 + 抗 Win11 锁定的多轮清库 + ie4uinit/SHChangeNotify 强刷）\n" +
-            "• 默认接入 GitHub Releases 自动更新与 SHA-256 校验，单进程常驻仅 ~35 MB 内存";
+            "• 修复「一键释放内存」修剪 0 个进程的严重 Bug（修正 x64 进程内存结构偏移 152→144 并优化权限与回退机制，真实释放数百 MB 至数 GB 空闲内存，内存 Top 12 排行恢复精准）\n" +
+            "• 升级「卡顿急救」：释放内存的同时自动对高占 CPU（≥8%）后台进程温和降权（绝不关闭文档），高负载标题直接点出最高占用进程\n" +
+            "• 包含 v9.0.3「PowerShell 7 一键设为默认终端」与 v9.0.2「桌面白纸图标深层修复」";
 
         public static UpdateInfo Check(string updateSource)
         {

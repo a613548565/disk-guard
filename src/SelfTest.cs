@@ -76,9 +76,14 @@ namespace DiskGuard
                 bool protOk = SystemHealth.IsProtectedProcess("explorer") && SystemHealth.IsProtectedProcess("lsass") && !SystemHealth.IsProtectedProcess("notepad");
                 var ports = SystemHealth.ListListeningPorts("");
                 var startups = SystemHealth.ListStartups();
-                sb.AppendLine(string.Format("sampleMs={0} ms  mem={1:0.0}% ({2}/{3})  cpu={4:0.0}%  procs={5}  hung={6}  ports={7}  startups={8}  procGuard={9}",
-                    psw.ElapsedMilliseconds, snap.MemPct, Util.Fmt(snap.MemUsedBytes), Util.Fmt(snap.MemTotalBytes), snap.CpuPct, snap.ProcessCount, snap.HungApps.Count, ports.Count, startups.Count, protOk ? "OK" : "FAIL"));
-                ok &= protOk && snap.MemTotalBytes > 0 && snap.ProcessCount > 10;
+                long topMemBytes = snap.TopMem.Count > 0 ? snap.TopMem[0].WorkingSetBytes : 0;
+                var selfTrim = SystemHealth.CleanMemory(Process.GetCurrentProcess().Id);
+                bool memOffOk = topMemBytes >= 30L * 1024 * 1024 && selfTrim.Summary.Contains("修剪了 1 个");
+                sb.AppendLine(string.Format("sampleMs={0} ms  mem={1:0.0}% ({2}/{3})  cpu={4:0.0}%  procs={5}  topMem={6}({7})  selfTrim={8}  hung={9}  ports={10}  startups={11}  procGuard={12}",
+                    psw.ElapsedMilliseconds, snap.MemPct, Util.Fmt(snap.MemUsedBytes), Util.Fmt(snap.MemTotalBytes), snap.CpuPct, snap.ProcessCount,
+                    snap.TopMem.Count > 0 ? snap.TopMem[0].Name : "-", Util.Fmt(topMemBytes), memOffOk ? "OK" : "FAIL",
+                    snap.HungApps.Count, ports.Count, startups.Count, protOk ? "OK" : "FAIL"));
+                ok &= protOk && memOffOk && snap.MemTotalBytes > 0 && snap.ProcessCount > 10;
 
                 sb.AppendLine("== v7/v8 modules (updater + wsl + dups + userAudit + safeRelocator + software + env + ps7) ==");
                 var uTest = Updater.ParseManifest("{\"version\":\"9.1.0\",\"file\":\"DiskGuard-Setup-9.1.exe\",\"sha256\":\"abc\",\"notes\":\"test\"}", "https://example.com/dg/");

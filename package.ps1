@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
-$ver = "9.0.3"
+$ver = "9.0.4"
 $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $wpf = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\WPF"
 $ico = Join-Path $root "assets\DiskGuard.ico"
@@ -70,7 +70,7 @@ $manifest = @{
     version = $ver
     file = ("DiskGuard-Setup-" + $ver + ".exe")
     sha256 = $sha
-    notes = "v9.0.3: PowerShell 7 卡片新增「一键设为默认终端」（自动备份并切换 Windows Terminal / VS Code / Cursor 为 PS 7）；包含 v9.0.2 桌面白纸图标深层修复与 Docker 6 级自动探测。"
+    notes = "v9.0.4: 修复一键释放内存修剪 0 进程的 Bug（修正 x64 WorkingSetSize 偏移 152→144，真实释放 GB 级空闲内存）；升级卡顿急救自动对高占 CPU 后台进程温和降权；包含 PS7 一键设为默认终端与白纸图标深层修复。"
 } | ConvertTo-Json -Depth 3
 [System.IO.File]::WriteAllText($manifestPath, $manifest, (New-Object System.Text.UTF8Encoding($false)))
 

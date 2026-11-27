@@ -23,6 +23,8 @@ namespace DiskGuard
         TextBlock perfTitleTxt, memMetaTxt, cpuMetaTxt, hungTxt;
         Canvas memSparkCanvas, cpuSparkCanvas;
         Button btnPerfPause, btnKillHung;
+        int lastHungPid;
+        string lastHungName = "", lastHungMem = "";
         StackPanel procListPanel, netHostPanel;
         NetworkStatus netData;
         bool netLoaded = false;
@@ -49,7 +51,7 @@ namespace DiskGuard
 
             var acts = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             var bExp = WpfUI.Btn("重启任务栏", "secondary", AskRestartExplorer); bExp.Margin = new Thickness(0, 0, 6, 0);
-            var bLag = WpfUI.Btn("卡顿急救", "secondary", () => RunBugFixAndNotify("lag-rescue")); bLag.Margin = new Thickness(0, 0, 6, 0);
+            var bLag = WpfUI.Btn("卡顿急救", "secondary", () => RunBg(() => { var r = SystemHealth.RunBugFix("lag-rescue"); OnUI(() => { ShowBanner(r.Ok, r.Title + "：" + r.Summary); SamplePerfOnceAsync(); }); })); bLag.Margin = new Thickness(0, 0, 6, 0);
             var bMem = WpfUI.Btn("一键释放内存", "primary", () => RunBg(() => { var r = SystemHealth.CleanMemory(null); OnUI(() => { ShowBanner(r.Ok, r.Title + "：" + r.Summary); SamplePerfOnceAsync(); }); }));
             acts.Children.Add(bExp); acts.Children.Add(bLag); acts.Children.Add(bMem);
             Grid.SetColumn(acts, 1);
@@ -60,7 +62,7 @@ namespace DiskGuard
             hg.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             hg.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             hungTxt = WpfUI.Txt("", 12.2, true, WpfUI.Pal.Warn);
-            btnKillHung = WpfUI.Btn("结束假死窗口", "danger", null, true); Grid.SetColumn(btnKillHung, 1);
+            btnKillHung = WpfUI.Btn("结束假死窗口", "danger", () => { if (lastHungPid > 0) AskKillProc(lastHungPid, lastHungName, lastHungMem); }, true); Grid.SetColumn(btnKillHung, 1);
             hg.Children.Add(hungTxt); hg.Children.Add(btnKillHung);
             hungBanner = new Border { Background = WpfUI.Pal.WarnSoft, CornerRadius = new CornerRadius(10), Padding = new Thickness(12, 8, 10, 8), Margin = new Thickness(0, 10, 0, 0), Visibility = Visibility.Collapsed, Child = hg };
             hSp.Children.Add(hungBanner);
@@ -87,9 +89,17 @@ namespace DiskGuard
             var ptb = new Grid { Margin = new Thickness(14, 10, 14, 10) };
             ptb.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             ptb.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var ptabs = new WrapPanel();
-            ptabs.Children.Add(WpfUI.PillBtn("内存占用 Top 12", procTab == "mem", () => { procTab = "mem"; RenderProcListUI(); }));
-            ptabs.Children.Add(WpfUI.PillBtn("CPU 占用 Top 10", procTab == "cpu", () => { procTab = "cpu"; RenderProcListUI(); }));
+            var procTabHost = new Border();
+            Action rebuildProcTabs = null;
+            rebuildProcTabs = () =>
+            {
+                procTabHost.Child = WpfUI.SegmentedBar(new[] {
+                    new KeyValuePair<string, string>("mem", "内存占用 Top 12"),
+                    new KeyValuePair<string, string>("cpu", "CPU 占用 Top 10")
+                }, procTab, k => { procTab = k; rebuildProcTabs(); RenderProcListUI(); });
+            };
+            rebuildProcTabs();
+            var ptabs = procTabHost;
             var pActs = new StackPanel { Orientation = Orientation.Horizontal };
             btnPerfPause = WpfUI.Btn(perfManualPaused ? "恢复刷新" : "暂停刷新", "secondary", () => { perfManualPaused = !perfManualPaused; btnPerfPause.Content = perfManualPaused ? "恢复刷新" : "暂停刷新"; SyncPerfTimerState(); }, true);
             btnPerfPause.Margin = new Thickness(0, 0, 6, 0);
@@ -175,8 +185,8 @@ namespace DiskGuard
             if (lastPerf.HungApps.Count > 0)
             {
                 var h = lastPerf.HungApps[0];
+                lastHungPid = h.Pid; lastHungName = h.Name; lastHungMem = Util.Fmt(h.WorkingSetBytes);
                 hungTxt.Text = string.Format("检测到 {0} 个未响应假死窗口：{1}", lastPerf.HungApps.Count, h.Name);
-                btnKillHung.Click += (s, e) => AskKillProc(h.Pid, h.Name, Util.Fmt(h.WorkingSetBytes));
                 hungBanner.Visibility = Visibility.Visible;
             }
             else hungBanner.Visibility = Visibility.Collapsed;

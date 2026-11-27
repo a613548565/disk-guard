@@ -101,6 +101,9 @@ namespace DiskGuard
         static extern bool EmptyWorkingSet(IntPtr hProcess);
 
         [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool SetProcessWorkingSetSize(IntPtr hProcess, IntPtr dwMinimumWorkingSetSize, IntPtr dwMaximumWorkingSetSize);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
         static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, int dwProcessId);
 
         [DllImport("kernel32.dll", SetLastError = true)]
@@ -122,6 +125,7 @@ namespace DiskGuard
         const int SystemProcessInformation = 5;
         const int STATUS_INFO_LENGTH_MISMATCH = unchecked((int)0xC0000004);
         const uint PROCESS_QUERY_INFORMATION = 0x0400;
+        const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
         const uint PROCESS_SET_QUOTA = 0x0100;
 
         static readonly HashSet<string> ProtectedProcs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -240,7 +244,7 @@ namespace DiskGuard
                         IntPtr namePtr = Marshal.ReadIntPtr(p, 64);
                         int basePrio = Marshal.ReadInt32(p, 72);
                         int pid = (int)Marshal.ReadIntPtr(p, 80).ToInt64();
-                        long workingSet = Marshal.ReadInt64(p, 152); // WorkingSetSize on x64
+                        long workingSet = Marshal.ReadInt64(p, 144); // WorkingSetSize on x64 (offset 144; 152 is QuotaPeakPagedPoolUsage!)
 
                         if (pid > 4 && nameLen > 0 && namePtr != IntPtr.Zero)
                         {
@@ -366,11 +370,29 @@ namespace DiskGuard
 
             var reasons = new List<string>();
             if (snap.MemPct >= 88) reasons.Add("内存占用过高 (" + snap.MemPct.ToString("0.0") + "%)");
-            if (snap.CpuPct >= 88) reasons.Add("CPU 持续满载 (" + snap.CpuPct.ToString("0.0") + "%)");
+            if (snap.CpuPct >= 88)
+            {
+                var topC = snap.TopCpu.FirstOrDefault(x => x.CpuPct >= 5.0);
+                string culprit = topC != null ? (" · 最高 " + topC.Name + " " + topC.CpuPct.ToString("0.0") + "%") : "";
+                reasons.Add("CPU 持续满载 (" + snap.CpuPct.ToString("0.0") + "%" + culprit + ")");
+            }
             if (snap.HungApps.Count > 0) reasons.Add("发现 " + snap.HungApps.Count + " 个无响应窗口");
             snap.IsLagging = reasons.Count > 0;
             snap.LagReason = string.Join(" · ", reasons.ToArray());
             return snap;
+        }
+
+        static bool TryTrimProcessHandle(int pid)
+        {
+            IntPtr h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_QUOTA, false, pid);
+            if (h == IntPtr.Zero) h = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_SET_QUOTA, false, pid);
+            if (h == IntPtr.Zero) return false;
+            try
+            {
+                if (EmptyWorkingSet(h)) return true;
+                return SetProcessWorkingSetSize(h, new IntPtr(-1), new IntPtr(-1));
+            }
+            finally { CloseHandle(h); }
         }
 
         public static FixResult CleanMemory(int? singlePid = null)
@@ -382,29 +404,20 @@ namespace DiskGuard
             int trimmed = 0;
             if (singlePid.HasValue)
             {
-                IntPtr h = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_SET_QUOTA, false, singlePid.Value);
-                if (h != IntPtr.Zero)
-                {
-                    try { if (EmptyWorkingSet(h)) trimmed = 1; }
-                    finally { CloseHandle(h); }
-                }
+                if (TryTrimProcessHandle(singlePid.Value)) trimmed = 1;
             }
             else
             {
                 int myPid = Process.GetCurrentProcess().Id;
                 foreach (var r in QueryAllProcessesFast())
                 {
-                    if (r.Pid == myPid || IsProtectedProcess(r.Name) || r.WorkingSet < 10 * 1024 * 1024) continue;
-                    IntPtr h = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_SET_QUOTA, false, r.Pid);
-                    if (h != IntPtr.Zero)
-                    {
-                        try { if (EmptyWorkingSet(h)) trimmed++; }
-                        finally { CloseHandle(h); }
-                    }
+                    if (r.Pid == myPid || IsProtectedProcess(r.Name) || r.WorkingSet < 8 * 1024 * 1024) continue;
+                    if (TryTrimProcessHandle(r.Pid)) trimmed++;
                 }
+                try { GC.Collect(); GC.WaitForPendingFinalizers(); EmptyWorkingSet(Process.GetCurrentProcess().Handle); } catch { }
             }
 
-            Thread.Sleep(250);
+            Thread.Sleep(350);
             ReadMemory(out total, out availAfter, out pctAfter);
             long gained = Math.Max(0, availAfter - availBefore);
             return new FixResult
@@ -498,7 +511,33 @@ namespace DiskGuard
                 case "lag-rescue":
                     var memRes = CleanMemory(null);
                     Util.Run("ipconfig.exe", "/flushdns", 8000, out ex);
-                    return new FixResult { Ok = true, Title = "一键卡顿急救已完成", Summary = memRes.Summary + "；同时已刷新 DNS 缓存" };
+                    var throttled = new List<string>();
+                    try
+                    {
+                        var snap = SampleAll();
+                        int myPid = Process.GetCurrentProcess().Id;
+                        foreach (var hp in snap.TopCpu)
+                        {
+                            if (hp.Pid == myPid || hp.IsProtected || hp.CpuPct < 8.0) continue;
+                            try
+                            {
+                                using (var proc = Process.GetProcessById(hp.Pid))
+                                {
+                                    if (proc.PriorityClass == ProcessPriorityClass.Normal || proc.PriorityClass == ProcessPriorityClass.AboveNormal)
+                                    {
+                                        proc.PriorityClass = ProcessPriorityClass.BelowNormal;
+                                        throttled.Add(hp.Name + "(" + hp.CpuPct.ToString("0.0") + "%)");
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+                    catch { }
+                    string cpuNote = throttled.Count > 0
+                        ? ("；已对高占 CPU 后台进程温和降权：" + string.Join("、", throttled.Take(4).ToArray()))
+                        : "；已刷新 DNS 缓存（未发现可降权的异常高占 CPU 进程）";
+                    return new FixResult { Ok = true, Title = "一键卡顿急救已完成", Summary = memRes.Summary + cpuNote };
 
                 default:
                     return new FixResult { Ok = false, Title = "未知修复项", Summary = fixId };
