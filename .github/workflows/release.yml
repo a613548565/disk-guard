@@ -44,12 +44,13 @@ jobs:
           $setup = ".\release\$($manifest.file)"
           $portable = ".\release\DiskGuard-$ver-Portable-win-x64.zip"
 
+          $fileName = $manifest.file
           $notes = @(
             $manifest.notes,
             "",
             "### 安装说明",
-            "- 推荐下载 `$($manifest.file)` 双击安装（单文件约 200 KB，保留原有配置无损升级）。",
-            "- 免安装绿色版可下载 `DiskGuard-$ver-Portable-win-x64.zip`。",
+            ("- 推荐下载 ``" + $fileName + "`` 双击安装（单文件约 200 KB，保留原有配置无损升级）。"),
+            ("- 免安装绿色版可下载 ``DiskGuard-" + $ver + "-Portable-win-x64.zip``。"),
             "",
             "SHA256: $sha"
           ) -join "`n"
