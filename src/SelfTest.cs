@@ -91,6 +91,7 @@ namespace DiskGuard
                 var wslSt = WslTuner.Read();
                 bool dupOk = DuplicateSafety(sb);
                 bool relocOk = RelocatorSafety(sb);
+                bool iconFixOk = IconShortcutRepairSafety(sb);
                 var apps = SoftwareManager.ListInstalledApps();
                 var ps = SoftwareManager.InspectPowerShell();
                 var env = NetworkEnvManager.InspectEnvVars();
@@ -100,7 +101,7 @@ namespace DiskGuard
                     apps.Count, ps.WindowsPsVersion, ps.HasPwsh7, ps.Pwsh7Version ?? "-",
                     env.UserPath.Count, env.UserMissingCount, env.UserDupCount,
                     env.MachinePath.Count, env.MachineMissingCount, env.MachineDupCount));
-                ok &= updOk && dupOk && relocOk && apps.Count > 0;
+                ok &= updOk && dupOk && relocOk && iconFixOk && apps.Count > 0;
 
                 if (!string.IsNullOrEmpty(screenshotDir))
                 {
@@ -203,6 +204,42 @@ namespace DiskGuard
                 bool pass = res.Groups.Count == 1 && res.Groups[0].Files.Count == 2;
                 sb.AppendLine((pass ? "OK   " : "FAIL ") + "三段式重复大文件精验：准确匹配 2 个相同文件，排除仅中间 1 字节不同的同体积文件");
                 return pass;
+            }
+            finally { try { Directory.Delete(root, true); } catch { } }
+        }
+
+        static bool IconShortcutRepairSafety(StringBuilder sb)
+        {
+            string root = Path.Combine(Path.GetTempPath(), "dg_icontest_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(root);
+                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                object shell = Activator.CreateInstance(shellType);
+                string notepad = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "notepad.exe");
+
+                // 1) 目标存在但 IconLocation 指向丢失 .ico -> 必须自动修复
+                string lnkFix = Path.Combine(root, "FixMe.lnk");
+                object sc1 = shellType.InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { lnkFix });
+                sc1.GetType().InvokeMember("TargetPath", System.Reflection.BindingFlags.SetProperty, null, sc1, new object[] { notepad });
+                sc1.GetType().InvokeMember("IconLocation", System.Reflection.BindingFlags.SetProperty, null, sc1, new object[] { @"Z:\missing\bad.ico,0" });
+                sc1.GetType().InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, sc1, null);
+
+                // 2) 目标本身不存在 -> 必须精准定位并报告
+                string lnkBroken = Path.Combine(root, "EVBroken.lnk");
+                object sc2 = shellType.InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { lnkBroken });
+                sc2.GetType().InvokeMember("TargetPath", System.Reflection.BindingFlags.SetProperty, null, sc2, new object[] { @"Z:\missing\EVPlayer2.exe" });
+                sc2.GetType().InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, sc2, null);
+
+                var rep = SystemHealth.InspectAndRepairDesktopShortcuts(new[] { root });
+                bool pass = rep.ScannedCount == 2 && rep.RepairedCount == 1 && rep.BrokenTargets.Count == 1;
+                sb.AppendLine((pass ? "OK   " : "FAIL ") + "桌面白纸图标快捷方式沙箱：自动修复丢失 IconLocation，精准识别失靶快捷方式");
+                return pass;
+            }
+            catch (Exception ex)
+            {
+                sb.AppendLine("FAIL 桌面白纸图标沙箱异常：" + ex.Message);
+                return false;
             }
             finally { try { Directory.Delete(root, true); } catch { } }
         }

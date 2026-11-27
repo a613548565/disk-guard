@@ -304,7 +304,7 @@ namespace DiskGuard
             var fGrid = new UniformGrid { Columns = 3, Margin = new Thickness(0, 11, 0, 0) };
             fGrid.Children.Add(MakeBugTile("任务栏 / 桌面假死", "秒修", "安全重启 explorer.exe，专治任务栏点不动", WpfUI.Pal.Warn, AskRestartExplorer));
             fGrid.Children.Add(MakeBugTile("网页打不开 / DNS", "零风险", "立即刷新系统 DNS 缓存修复域名解析异常", WpfUI.Pal.Accent, () => RunBugFixAndNotify("flush-dns")));
-            fGrid.Children.Add(MakeBugTile("桌面图标变白纸", "L2", "清理损坏图标与缩略图缓存并自动重建", WpfUI.Pal.Violet, () => AskBugFix("fix-icon-cache", "重建图标缓存", "将短暂重启桌面资源管理器并重建缓存。")));
+            fGrid.Children.Add(MakeBugTile("桌面图标变白纸", "L2", "深层重建图标缓存 + 自动修复异常快捷方式并定位失效目标", WpfUI.Pal.Violet, () => AskBugFix("fix-icon-cache", "深层修复桌面白纸图标", "将自动检查桌面快捷方式图标路径、强清 Win10/11 图标缓存库、重启资源管理器并触发系统图标强刷。")));
             fGrid.Children.Add(MakeBugTile("代理关掉后断网", "需重启", "重置 Windows 网络协议栈 (Winsock)", WpfUI.Pal.Crit, () => AskBugFix("reset-winsock", "重置 Winsock 协议栈", "需管理员权限，执行后建议重启电脑。")));
             fGrid.Children.Add(MakeBugTile("系统更新卡死 0%", "L2", "重启 Windows Update 服务并清空损坏下载队列", WpfUI.Pal.Ok, () => AskBugFix("fix-wu", "重置更新组件", "不影响已安装的系统补丁。")));
             fGrid.Children.Add(MakeBugTile("系统文件损坏修复", "SFC", "调用官方 sfc /scannow 扫描并修复系统文件", WpfUI.Pal.Indigo, () => AskBugFix("sfc-scan", "执行 SFC 系统文件修复", "调用官方 sfc /scannow（需管理员，约 2~5 分钟）。")));
@@ -374,7 +374,7 @@ namespace DiskGuard
             if (!WpfUI.ShowGuardDialog(this, "L2", title, desc, new[] { title }, "确认执行此修复项", "", "确认执行")) return;
             RunBugFixAndNotify(id);
         }
-        void RunBugFixAndNotify(string id) { RunBg(() => { var r = SystemHealth.RunBugFix(id); OnUI(() => ShowBanner(r.Ok, r.Title + "：" + r.Summary)); }); }
+        void RunBugFixAndNotify(string id) { RunBg(() => { var r = SystemHealth.RunBugFix(id); OnUI(() => ShowBanner(r.Ok, r.Title + "：" + r.Summary + (string.IsNullOrEmpty(r.Detail) ? "" : " · " + r.Detail))); }); }
 
         void RenderPortsUI(List<PortEntry> list)
         {

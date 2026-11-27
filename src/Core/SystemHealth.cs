@@ -88,6 +88,15 @@ namespace DiskGuard
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool GetSystemTimes(out long lpIdleTime, out long lpKernelTime, out long lpUserTime);
 
+        [DllImport("shell32.dll")]
+        static extern void SHChangeNotify(int wEventId, uint uFlags, IntPtr dwItem1, IntPtr dwItem2);
+
+        [DllImport("shell32.dll", CharSet = CharSet.Auto)]
+        static extern uint ExtractIconEx(string lpszFile, int nIconIndex, IntPtr[] phiconLarge, IntPtr[] phiconSmall, uint nIcons);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        static extern bool DestroyIcon(IntPtr hIcon);
+
         [DllImport("psapi.dll", SetLastError = true)]
         static extern bool EmptyWorkingSet(IntPtr hProcess);
 
@@ -466,23 +475,7 @@ namespace DiskGuard
                     return new FixResult { Ok = ex == 0, Title = "网络协议栈 (Winsock) 已重置", Summary = ex == 0 ? "重置成功，建议稍后重启电脑完全生效" : "未完成（可能取消了管理员授权）", Detail = wsOut };
 
                 case "fix-icon-cache":
-                    try
-                    {
-                        string expDir = Path.Combine(Util.LocalAppData, "Microsoft", "Windows", "Explorer");
-                        int delCnt = 0;
-                        foreach (var p in Process.GetProcessesByName("explorer"))
-                        {
-                            try { p.Kill(); p.WaitForExit(3000); } catch { }
-                        }
-                        Thread.Sleep(500);
-                        if (Directory.Exists(expDir))
-                            foreach (var f in Directory.GetFiles(expDir, "*cache_*.db")) { try { File.Delete(f); delCnt++; } catch { } }
-                        string oldIcon = Path.Combine(Util.LocalAppData, "IconCache.db");
-                        if (File.Exists(oldIcon)) { try { File.Delete(oldIcon); delCnt++; } catch { } }
-                        if (Process.GetProcessesByName("explorer").Length == 0) Process.Start("explorer.exe");
-                        return new FixResult { Ok = true, Title = "图标与缩略图缓存已重建", Summary = "已清除 " + delCnt + " 个缓存数据库并重启桌面" };
-                    }
-                    catch (Exception e) { return new FixResult { Ok = false, Title = "修复失败", Summary = e.Message }; }
+                    return FixDesktopIconsDeep();
 
                 case "dism-check":
                     string ckOut = RunMaybeElevated("dism.exe", "/Online /Cleanup-Image /CheckHealth", out ex);
@@ -592,6 +585,327 @@ namespace DiskGuard
                 }
             }
             catch { }
+        }
+
+        public class ShortcutRepairReport
+        {
+            public int ScannedCount;
+            public int RepairedCount;
+            public List<string> RepairedNames = new List<string>();
+            public List<string> BrokenTargets = new List<string>();
+            public List<string> NoIconExeNames = new List<string>();
+        }
+
+        static bool HasIconAt(string filePath, int iconIndex)
+        {
+            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) return false;
+            try
+            {
+                var large = new IntPtr[1];
+                var small = new IntPtr[1];
+                uint n = ExtractIconEx(filePath, iconIndex, large, small, 1);
+                if (large[0] != IntPtr.Zero) DestroyIcon(large[0]);
+                if (small[0] != IntPtr.Zero) DestroyIcon(small[0]);
+                return n > 0;
+            }
+            catch { return false; }
+        }
+
+        static void ParseIconLocation(string raw, out string path, out int index)
+        {
+            path = "";
+            index = 0;
+            if (string.IsNullOrWhiteSpace(raw)) return;
+            string s = raw.Trim();
+            int comma = s.LastIndexOf(',');
+            if (comma >= 0)
+            {
+                string idxStr = s.Substring(comma + 1).Trim();
+                int parsed;
+                if (int.TryParse(idxStr, out parsed))
+                {
+                    index = parsed;
+                    s = s.Substring(0, comma).Trim();
+                }
+            }
+            s = s.Trim('"', ' ');
+            if (s.Length > 0)
+            {
+                try { s = Environment.ExpandEnvironmentVariables(s); } catch { }
+            }
+            path = s;
+        }
+
+        static string FindNearbyIco(string targetExe)
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(targetExe);
+                if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return null;
+                foreach (var ico in Directory.GetFiles(dir, "*.ico"))
+                    if (HasIconAt(ico, 0)) return ico;
+                foreach (var sub in new[] { "res", "resources", "icons", "icon", "assets" })
+                {
+                    string sd = Path.Combine(dir, sub);
+                    if (!Directory.Exists(sd)) continue;
+                    foreach (var ico in Directory.GetFiles(sd, "*.ico"))
+                        if (HasIconAt(ico, 0)) return ico;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        public static ShortcutRepairReport InspectAndRepairDesktopShortcuts(string[] dirs)
+        {
+            var rep = new ShortcutRepairReport();
+            Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+            if (shellType == null) return rep;
+            object shell = null;
+            try
+            {
+                shell = Activator.CreateInstance(shellType);
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var dir in dirs)
+                {
+                    if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir) || !seen.Add(dir)) continue;
+                    string[] lnks;
+                    try { lnks = Directory.GetFiles(dir, "*.lnk"); } catch { continue; }
+                    foreach (var lnk in lnks)
+                    {
+                        rep.ScannedCount++;
+                        object sc = null;
+                        try
+                        {
+                            sc = shellType.InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { lnk });
+                            if (sc == null) continue;
+                            Type scType = sc.GetType();
+                            string target = Convert.ToString(scType.InvokeMember("TargetPath", System.Reflection.BindingFlags.GetProperty, null, sc, null)) ?? "";
+                            string iconLoc = Convert.ToString(scType.InvokeMember("IconLocation", System.Reflection.BindingFlags.GetProperty, null, sc, null)) ?? "";
+                            string name = Path.GetFileNameWithoutExtension(lnk);
+
+                            string expTarget = target.Trim('"', ' ');
+                            if (expTarget.Length > 0) { try { expTarget = Environment.ExpandEnvironmentVariables(expTarget); } catch { } }
+
+                            // 仅校验本地盘符目标路径（避免误判 UWP/Shell 虚拟快捷方式）
+                            bool isLocalTarget = expTarget.Length >= 3 && char.IsLetter(expTarget[0]) && expTarget[1] == ':' && expTarget[2] == '\\';
+                            bool targetExists = !isLocalTarget || File.Exists(expTarget) || Directory.Exists(expTarget);
+
+                            if (isLocalTarget && !targetExists)
+                            {
+                                rep.BrokenTargets.Add(name + " → " + expTarget);
+                                continue;
+                            }
+
+                            string iconFile; int iconIdx;
+                            ParseIconLocation(iconLoc, out iconFile, out iconIdx);
+                            bool hasExplicitIconFile = !string.IsNullOrEmpty(iconFile);
+                            bool iconValid = true;
+                            if (hasExplicitIconFile)
+                            {
+                                bool isLocalIcon = iconFile.Length >= 3 && char.IsLetter(iconFile[0]) && iconFile[1] == ':';
+                                if (isLocalIcon)
+                                {
+                                    string ext = Path.GetExtension(iconFile).ToLowerInvariant();
+                                    bool checkExtract = ext == ".exe" || ext == ".dll" || ext == ".ico" || ext == ".icl";
+                                    iconValid = File.Exists(iconFile) && (!checkExtract || HasIconAt(iconFile, iconIdx));
+                                }
+                            }
+
+                            // 情况 1：IconLocation 指向丢失/无效图标，而目标程序存在 -> 自动修回目标程序或同目录 .ico
+                            if (!iconValid && isLocalTarget && File.Exists(expTarget))
+                            {
+                                string fixLoc = null;
+                                if (HasIconAt(expTarget, 0)) fixLoc = target + ",0";
+                                else
+                                {
+                                    string nearIco = FindNearbyIco(expTarget);
+                                    if (!string.IsNullOrEmpty(nearIco)) fixLoc = nearIco + ",0";
+                                }
+                                if (!string.IsNullOrEmpty(fixLoc))
+                                {
+                                    scType.InvokeMember("IconLocation", System.Reflection.BindingFlags.SetProperty, null, sc, new object[] { fixLoc });
+                                    scType.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, sc, null);
+                                    try { File.SetLastWriteTime(lnk, DateTime.Now); } catch { }
+                                    rep.RepairedCount++;
+                                    rep.RepairedNames.Add(name);
+                                }
+                                else
+                                {
+                                    rep.NoIconExeNames.Add(name);
+                                }
+                            }
+                            // 情况 2：IconLocation 未设且目标为 .exe，但该 .exe 本身不含任何嵌入图标资源 -> 尝试同目录 .ico
+                            else if (!hasExplicitIconFile && isLocalTarget && File.Exists(expTarget) && expTarget.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && !HasIconAt(expTarget, 0))
+                            {
+                                string nearIco = FindNearbyIco(expTarget);
+                                if (!string.IsNullOrEmpty(nearIco))
+                                {
+                                    scType.InvokeMember("IconLocation", System.Reflection.BindingFlags.SetProperty, null, sc, new object[] { nearIco + ",0" });
+                                    scType.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, sc, null);
+                                    try { File.SetLastWriteTime(lnk, DateTime.Now); } catch { }
+                                    rep.RepairedCount++;
+                                    rep.RepairedNames.Add(name);
+                                }
+                                else
+                                {
+                                    rep.NoIconExeNames.Add(name);
+                                }
+                            }
+                        }
+                        catch { }
+                        finally { if (sc != null) { try { Marshal.FinalReleaseComObject(sc); } catch { } } }
+                    }
+
+                    // 同时排查桌面 .url 快捷方式（IconFile 丢失）
+                    string[] urls;
+                    try { urls = Directory.GetFiles(dir, "*.url"); } catch { continue; }
+                    foreach (var uf in urls)
+                    {
+                        try
+                        {
+                            foreach (var line in File.ReadAllLines(uf))
+                            {
+                                if (!line.StartsWith("IconFile=", StringComparison.OrdinalIgnoreCase)) continue;
+                                string icf = line.Substring(9).Trim('"', ' ');
+                                if (icf.Length >= 3 && char.IsLetter(icf[0]) && icf[1] == ':' && !File.Exists(icf))
+                                    rep.BrokenTargets.Add(Path.GetFileNameWithoutExtension(uf) + "(URL图标丢失) → " + icf);
+                                break;
+                            }
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { }
+            finally { if (shell != null) { try { Marshal.FinalReleaseComObject(shell); } catch { } } }
+            return rep;
+        }
+
+        static FixResult FixDesktopIconsDeep()
+        {
+            try
+            {
+                // 1. 扫描并自动修复桌面（当前用户 + 公共桌面）异常快捷方式
+                var desktopDirs = new[]
+                {
+                    Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory)
+                };
+                var lnkRep = InspectAndRepairDesktopShortcuts(desktopDirs);
+
+                // 2. 抗 Win11 explorer 秒级自动重启锁定：最多 3 轮快速结束宿主并强删全部图标/缩略图缓存库
+                string expDir = Path.Combine(Util.LocalAppData, "Microsoft", "Windows", "Explorer");
+                string oldIcon = Path.Combine(Util.LocalAppData, "IconCache.db");
+                int delCnt = 0;
+                int lockedCnt = 0;
+                string[] lockProcs = new[] { "explorer", "StartMenuExperienceHost", "ShellExperienceHost" };
+
+                for (int round = 0; round < 3; round++)
+                {
+                    foreach (var pn in lockProcs)
+                    {
+                        foreach (var p in Process.GetProcessesByName(pn))
+                        {
+                            try { p.Kill(); p.WaitForExit(1200); } catch { }
+                        }
+                    }
+                    Thread.Sleep(120);
+
+                    var targets = new List<string>();
+                    if (File.Exists(oldIcon)) targets.Add(oldIcon);
+                    if (Directory.Exists(expDir))
+                    {
+                        try { targets.AddRange(Directory.GetFiles(expDir, "iconcache*.db")); } catch { }
+                        try { targets.AddRange(Directory.GetFiles(expDir, "thumbcache*.db")); } catch { }
+                        try { targets.AddRange(Directory.GetFiles(expDir, "*.dg_old")); } catch { }
+                    }
+
+                    lockedCnt = 0;
+                    foreach (var f in targets)
+                    {
+                        try
+                        {
+                            File.SetAttributes(f, FileAttributes.Normal);
+                            File.Delete(f);
+                            delCnt++;
+                        }
+                        catch
+                        {
+                            // 若文件允许 FILE_SHARE_DELETE 重命名，移走后可让新 explorer 立即重建干净缓存库
+                            try
+                            {
+                                string moved = f + ".dg_old";
+                                if (File.Exists(moved)) { try { File.Delete(moved); } catch { } }
+                                File.Move(f, moved);
+                                delCnt++;
+                                try { File.Delete(moved); } catch { }
+                            }
+                            catch { lockedCnt++; }
+                        }
+                    }
+                    if (lockedCnt == 0) break;
+                }
+
+                // 3. 确保 explorer.exe 正常拉起
+                if (Process.GetProcessesByName("explorer").Length == 0)
+                {
+                    try { Process.Start("explorer.exe"); } catch { }
+                }
+                Thread.Sleep(900);
+
+                // 4. 调用 Win10/11 官方 ie4uinit 刷新命令 + Win32 SHChangeNotify 强制重绘桌面全部图标
+                int ex;
+                string ie4 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "ie4uinit.exe");
+                if (File.Exists(ie4))
+                {
+                    Util.Run(ie4, "-show", 8000, out ex);
+                    Util.Run(ie4, "-ClearIconCache", 8000, out ex);
+                }
+                try { SHChangeNotify(0x08000000, 0x0000, IntPtr.Zero, IntPtr.Zero); } catch { }
+
+                // 5. 检查注册表 Shell Icons\29 快捷方式覆盖是否指向了不存在的 .ico
+                string badShellIconNote = "";
+                try
+                {
+                    using (var k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Shell Icons"))
+                    {
+                        string v29 = k != null ? (k.GetValue("29") as string) : null;
+                        if (!string.IsNullOrWhiteSpace(v29))
+                        {
+                            string p29; int idx29;
+                            ParseIconLocation(v29, out p29, out idx29);
+                            if (!string.IsNullOrEmpty(p29) && p29.Length >= 3 && p29[1] == ':' && !File.Exists(p29))
+                                badShellIconNote = "检测到注册表 Shell Icons\\29 指向缺失文件(" + p29 + ")";
+                        }
+                    }
+                }
+                catch { }
+
+                var sumParts = new List<string>();
+                sumParts.Add("已清理/重建 " + delCnt + " 个图标缓存库并触发系统强制刷新");
+                if (lnkRep.RepairedCount > 0)
+                    sumParts.Add("自动修复 " + lnkRep.RepairedCount + " 个异常快捷方式(" + string.Join("、", lnkRep.RepairedNames.Take(3).ToArray()) + ")");
+                if (lockedCnt > 0)
+                    sumParts.Add("另有 " + lockedCnt + " 个缓存库被系统占用（注销或重启电脑后将彻底生效）");
+
+                var detailParts = new List<string>();
+                if (lnkRep.BrokenTargets.Count > 0)
+                    detailParts.Add("发现 " + lnkRep.BrokenTargets.Count + " 个快捷方式目标/图标文件已丢失（清缓存无法恢复，请重装或重建快捷方式）：" + string.Join("；", lnkRep.BrokenTargets.Take(3).ToArray()));
+                if (lnkRep.NoIconExeNames.Count > 0)
+                    detailParts.Add("以下程序本身未内嵌图标：" + string.Join("、", lnkRep.NoIconExeNames.Take(3).ToArray()));
+                if (!string.IsNullOrEmpty(badShellIconNote))
+                    detailParts.Add(badShellIconNote);
+
+                return new FixResult
+                {
+                    Ok = true,
+                    Title = "桌面白纸图标深层修复完成",
+                    Summary = string.Join("；", sumParts.ToArray()),
+                    Detail = string.Join(" | ", detailParts.ToArray())
+                };
+            }
+            catch (Exception e) { return new FixResult { Ok = false, Title = "修复失败", Summary = e.Message }; }
         }
 
         public static FixResult ToggleStartup(string id, bool enable)

@@ -3,15 +3,15 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
-$ver = "9.0.1"
+$ver = "9.0.2"
 $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $wpf = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\WPF"
 $ico = Join-Path $root "assets\DiskGuard.ico"
 $rel = Join-Path $root "release"
 $stage = Join-Path $rel "stage"
 $payloadZip = Join-Path $rel "payload.zip"
-$portableZip = Join-Path $rel "DiskGuard-9.0.1-Portable-win-x64.zip"
-$setupExe = Join-Path $rel "DiskGuard-Setup-9.0.1.exe"
+$portableZip = Join-Path $rel ("DiskGuard-" + $ver + "-Portable-win-x64.zip")
+$setupExe = Join-Path $rel ("DiskGuard-Setup-" + $ver + ".exe")
 $manifestPath = Join-Path $rel "latest.json"
 
 Write-Output "[1/6] Generating multi-size DiskGuard.ico..."
@@ -56,7 +56,7 @@ if (Test-Path $portableZip) { Remove-Item $portableZip -Force }
 Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $payloadZip -CompressionLevel Optimal
 Copy-Item $payloadZip $portableZip -Force
 
-Write-Output "[4/6] Compiling single-file GUI setup DiskGuard-Setup-9.0.1.exe..."
+Write-Output "[4/6] Compiling single-file GUI setup DiskGuard-Setup-$ver.exe..."
 & $csc /nologo /target:winexe /platform:x64 /optimize+ /codepage:65001 "/win32icon:$ico" `
   "/resource:$payloadZip,DiskGuard.payload.zip" "/out:$setupExe" `
   /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Core.dll `
@@ -68,9 +68,9 @@ Write-Output "[5/6] Generating auto-update manifest release\latest.json..."
 $sha = (Get-FileHash $setupExe -Algorithm SHA256).Hash.ToLowerInvariant()
 $manifest = @{
     version = $ver
-    file = "DiskGuard-Setup-9.0.1.exe"
+    file = ("DiskGuard-Setup-" + $ver + ".exe")
     sha256 = $sha
-    notes = "v9.0.1: 修复 Docker Desktop 自定义路径/非C盘无法检测问题（6级自动探测+WSL Lxss注册表识别）；优化自动更新404中文提示；单进程仅 ~34 MB 内存。"
+    notes = "v9.0.2: 彻底升级「桌面图标变白纸」修复引擎（.lnk 图标路径自动修复 + 失效快捷方式定位 + 抗 Win11 锁定的多轮清库 + ie4uinit/SHChangeNotify 强刷）；默认接入 GitHub Releases 自动更新与 SHA-256 校验。"
 } | ConvertTo-Json -Depth 3
 [System.IO.File]::WriteAllText($manifestPath, $manifest, (New-Object System.Text.UTF8Encoding($false)))
 

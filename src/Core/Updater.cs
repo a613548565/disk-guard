@@ -24,12 +24,12 @@ namespace DiskGuard
 
     public static class Updater
     {
-        public const string CurrentVersion = "9.0.1";
+        public const string CurrentVersion = "9.0.2";
         public const string CurrentReleaseNotes =
-            "• 修复 Docker Desktop 装在 D/E 盘或自定义路径时无法检测到的问题（6 级全自动路径/进程/注册表/WSL Lxss 探测）\n" +
-            "• 全新原生 DirectX WPF 架构：彻底告别 WebView2 6 进程，静置内存仅 ~34 MB、CPU 趋近 0%\n" +
-            "• 全新 macOS / iOS 18 极简 5 入口与「一键全面体检 & 一键智能修复」\n" +
-            "• 优化自动更新 404 引导提示，支持 GitHub / Gitee / 自建服务器 latest.json / 局域网共享目录一键静默升级";
+            "• 彻底升级「桌面图标变白纸」修复引擎：支持自动检测并修复损坏的 .lnk 快捷方式图标指向、定位失靶快捷方式、抗 Win11 explorer 秒级自启锁定的多轮清库 + ie4uinit/SHChangeNotify 强制重绘\n" +
+            "• 默认接入 GitHub Releases 自动更新源并支持 SHA-256 签名自动校验\n" +
+            "• 修复 Docker Desktop 非 C 盘/自定义路径探测（6 级自动探测 + WSL Lxss 注册表识别）\n" +
+            "• 原生 DirectX WPF 单进程架构，常驻内存 ~35 MB";
 
         public static UpdateInfo Check(string updateSource)
         {
