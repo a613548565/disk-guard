@@ -1,0 +1,71 @@
+name: Build and Release DiskGuard
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build and package DiskGuard
+        shell: pwsh
+        run: |
+          & .\package.ps1
+          Get-ChildItem .\release | Format-Table Name, Length -AutoSize
+
+      - name: Verify self-test
+        shell: pwsh
+        run: |
+          $p = Start-Process '.\bin\DiskGuard.exe' -ArgumentList '--selftest' -PassThru -Wait
+          Write-Output "SELFTEST_EXIT=$($p.ExitCode)"
+          if (Test-Path '.\bin\logs\selftest.txt') {
+            Get-Content '.\bin\logs\selftest.txt' -Encoding UTF8
+          }
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $manifest = Get-Content '.\release\latest.json' -Raw -Encoding UTF8 | ConvertFrom-Json
+          $ver = $manifest.version
+          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "v$ver" }
+          $sha = $manifest.sha256
+          $setup = ".\release\$($manifest.file)"
+          $portable = ".\release\DiskGuard-$ver-Portable-win-x64.zip"
+
+          $notes = @(
+            $manifest.notes,
+            "",
+            "### 安装说明",
+            "- 推荐下载 `$($manifest.file)` 双击安装（单文件约 200 KB，保留原有配置无损升级）。",
+            "- 免安装绿色版可下载 `DiskGuard-$ver-Portable-win-x64.zip`。",
+            "",
+            "SHA256: $sha"
+          ) -join "`n"
+
+          $notesFile = Join-Path $env:RUNNER_TEMP "release_notes.md"
+          [System.IO.File]::WriteAllText($notesFile, $notes, (New-Object System.Text.UTF8Encoding($false)))
+
+          $exists = $false
+          try {
+            gh release view $tag | Out-Null
+            $exists = $true
+          } catch { $exists = $false }
+
+          if ($exists) {
+            gh release upload $tag $setup $portable '.\release\latest.json' --clobber
+            gh release edit $tag --title "DiskGuard v$ver" --notes-file $notesFile
+          } else {
+            gh release create $tag $setup $portable '.\release\latest.json' --title "DiskGuard v$ver" --notes-file $notesFile
+          }

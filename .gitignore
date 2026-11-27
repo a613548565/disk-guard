@@ -1,0 +1,11 @@
+bin/
+bin_backup_*/
+build_tmp/
+lib/
+logs/
+release/
+shots*/
+*.ini
+*.log
+*.exe
+*.zip
