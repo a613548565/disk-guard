@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 
-$ver = "9.0.2"
+$ver = "9.0.3"
 $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $wpf = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\WPF"
 $ico = Join-Path $root "assets\DiskGuard.ico"
@@ -70,7 +70,7 @@ $manifest = @{
     version = $ver
     file = ("DiskGuard-Setup-" + $ver + ".exe")
     sha256 = $sha
-    notes = "v9.0.2: 彻底升级「桌面图标变白纸」修复引擎（.lnk 图标路径自动修复 + 失效快捷方式定位 + 抗 Win11 锁定的多轮清库 + ie4uinit/SHChangeNotify 强刷）；默认接入 GitHub Releases 自动更新与 SHA-256 校验。"
+    notes = "v9.0.3: PowerShell 7 卡片新增「一键设为默认终端」（自动备份并切换 Windows Terminal / VS Code / Cursor 为 PS 7）；包含 v9.0.2 桌面白纸图标深层修复与 Docker 6 级自动探测。"
 } | ConvertTo-Json -Depth 3
 [System.IO.File]::WriteAllText($manifestPath, $manifest, (New-Object System.Text.UTF8Encoding($false)))
 

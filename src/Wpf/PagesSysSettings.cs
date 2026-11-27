@@ -412,11 +412,37 @@ namespace DiskGuard
             h.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             var hl = new StackPanel();
             hl.Children.Add(WpfUI.Txt("PowerShell 7 (pwsh) 现代终端检测与一键升级", 15.5, true, WpfUI.Pal.Text));
-            hl.Children.Add(WpfUI.TxtWrap(string.Format("内置 Windows PowerShell v{0} · PowerShell 7：{1} · winget：{2}（与 5.1 并存互不冲突）",
-                psData.WindowsPsVersion, psData.HasPwsh7 ? ("已安装 v" + psData.Pwsh7Version) : "尚未安装", psData.HasWinget ? ("可用 " + psData.WingetVersion) : "未安装"), 12, WpfUI.Pal.Text2));
-            var bUp = WpfUI.Btn(psData.HasPwsh7 ? "检查升级至最新 PS 7" : "通过 winget 一键安装 PS 7", "primary", () => RunBg(() => { var r = SoftwareManager.UpgradePowerShell7(); OnUI(() => ShowBanner(r.Ok, r.Title + "：" + r.Summary)); }));
-            Grid.SetColumn(bUp, 1);
-            h.Children.Add(hl); h.Children.Add(bUp);
+            string defTag = !psData.HasPwsh7 ? "" : (psData.HasWindowsTerminal ? (psData.IsWtDefaultPs7 ? " · Windows 终端默认：已是 PS 7 ✓" : " · Windows 终端默认：未切换为 PS 7") : "");
+            hl.Children.Add(WpfUI.TxtWrap(string.Format("内置 Windows PowerShell v{0} · PowerShell 7：{1} · winget：{2}{3}",
+                psData.WindowsPsVersion, psData.HasPwsh7 ? ("已安装 v" + psData.Pwsh7Version) : "尚未安装", psData.HasWinget ? ("可用 " + psData.WingetVersion) : "未安装", defTag), 12, WpfUI.Pal.Text2));
+
+            var psActs = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            if (psData.HasPwsh7)
+            {
+                var bDef = WpfUI.Btn(psData.IsWtDefaultPs7 ? "同步设为默认终端" : "一键设为默认终端", psData.IsWtDefaultPs7 ? "secondary" : "primary", () =>
+                {
+                    if (!WpfUI.ShowGuardDialog(this, "L2", "将 PowerShell 7 设为默认终端",
+                        "将自动备份配置文件，并把 Windows Terminal（以及已安装的 VS Code / Cursor）默认终端切换为 PowerShell 7，绝不删除系统内置 5.1。",
+                        new[] { "目标终端：PowerShell " + psData.Pwsh7Version, "配置文件：写入前自动生成 .bak_dg 备份" },
+                        "确认自动备份并设为默认终端", "", "立即设为默认")) return;
+                    RunBg(() =>
+                    {
+                        var r = SoftwareManager.SetPowerShell7AsDefaultTerminal();
+                        psData = SoftwareManager.InspectPowerShell();
+                        OnUI(() =>
+                        {
+                            ShowBanner(r.Ok, r.Title + "：" + r.Summary + (string.IsNullOrEmpty(r.Detail) ? "" : " · " + r.Detail));
+                            RenderPsUI();
+                        });
+                    });
+                });
+                bDef.Margin = new Thickness(0, 0, 8, 0);
+                psActs.Children.Add(bDef);
+            }
+            var bUp = WpfUI.Btn(psData.HasPwsh7 ? "检查升级 PS 7" : "通过 winget 一键安装 PS 7", psData.HasPwsh7 && !psData.IsWtDefaultPs7 ? "secondary" : "primary", () => RunBg(() => { var r = SoftwareManager.UpgradePowerShell7(); OnUI(() => ShowBanner(r.Ok, r.Title + "：" + r.Summary)); }));
+            psActs.Children.Add(bUp);
+            Grid.SetColumn(psActs, 1);
+            h.Children.Add(hl); h.Children.Add(psActs);
             psHostPanel.Children.Add(WpfUI.HeroCard(h, new Thickness(18, 15, 18, 15)));
         }
 

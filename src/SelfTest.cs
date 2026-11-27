@@ -92,16 +92,17 @@ namespace DiskGuard
                 bool dupOk = DuplicateSafety(sb);
                 bool relocOk = RelocatorSafety(sb);
                 bool iconFixOk = IconShortcutRepairSafety(sb);
+                bool psDefOk = PsDefaultTerminalSafety(sb);
                 var apps = SoftwareManager.ListInstalledApps();
                 var ps = SoftwareManager.InspectPowerShell();
                 var env = NetworkEnvManager.InspectEnvVars();
                 sb.AppendLine((updOk ? "OK   " : "FAIL ") + "更新清单解析与版本比对");
                 sb.AppendLine("INFO WSL2 调优检测：ram=" + wslSt.PhysicalRamGB + "G  .wslconfig存在=" + wslSt.ConfigExists + "  hiberfil=" + Util.Fmt(wslSt.HiberfilBytes) + "  pagefile=" + Util.Fmt(wslSt.PagefileTotalBytes));
-                sb.AppendLine(string.Format("INFO 软件卸载={0}项  PS5={1}  PS7={2}({3})  UserPath={4}项(失效{5}/重复{6})  SysPath={7}项(失效{8}/重复{9})",
-                    apps.Count, ps.WindowsPsVersion, ps.HasPwsh7, ps.Pwsh7Version ?? "-",
+                sb.AppendLine(string.Format("INFO 软件卸载={0}项  PS5={1}  PS7={2}({3},wtDef={4})  UserPath={5}项(失效{6}/重复{7})  SysPath={8}项(失效{9}/重复{10})",
+                    apps.Count, ps.WindowsPsVersion, ps.HasPwsh7, ps.Pwsh7Version ?? "-", ps.IsWtDefaultPs7,
                     env.UserPath.Count, env.UserMissingCount, env.UserDupCount,
                     env.MachinePath.Count, env.MachineMissingCount, env.MachineDupCount));
-                ok &= updOk && dupOk && relocOk && iconFixOk && apps.Count > 0;
+                ok &= updOk && dupOk && relocOk && iconFixOk && psDefOk && apps.Count > 0;
 
                 if (!string.IsNullOrEmpty(screenshotDir))
                 {
@@ -205,6 +206,35 @@ namespace DiskGuard
                 sb.AppendLine((pass ? "OK   " : "FAIL ") + "三段式重复大文件精验：准确匹配 2 个相同文件，排除仅中间 1 字节不同的同体积文件");
                 return pass;
             }
+            finally { try { Directory.Delete(root, true); } catch { } }
+        }
+
+        static bool PsDefaultTerminalSafety(StringBuilder sb)
+        {
+            string root = Path.Combine(Path.GetTempPath(), "dg_wtps7_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(root);
+                string wt = Path.Combine(root, "wt_settings.json");
+                File.WriteAllText(wt, "{\r\n  // keep comment\r\n  \"defaultProfile\": \"{61c54bbd-c2c6-5271-96e7-009a87ff44bf}\",\r\n  \"profiles\": { \"list\": [] }\r\n}", new UTF8Encoding(false));
+                string bak1, err1;
+                bool okWt = SoftwareManager.PatchWindowsTerminalSettingsFile(wt, out bak1, out err1)
+                    && File.Exists(bak1)
+                    && SoftwareManager.IsWindowsTerminalDefaultPs7(wt)
+                    && File.ReadAllText(wt, Encoding.UTF8).Contains("// keep comment");
+
+                string ide = Path.Combine(root, "code_settings.json");
+                File.WriteAllText(ide, "{\r\n  \"editor.fontSize\": 14\r\n}", new UTF8Encoding(false));
+                string bak2;
+                bool okIde = SoftwareManager.PatchIdeDefaultPs7(ide, out bak2)
+                    && File.Exists(bak2)
+                    && File.ReadAllText(ide, Encoding.UTF8).Contains("\"terminal.integrated.defaultProfile.windows\": \"PowerShell\"");
+
+                bool pass = okWt && okIde;
+                sb.AppendLine((pass ? "OK   " : "FAIL ") + "PS7 默认终端切换沙箱：自动备份、保留注释并写入 Windows Terminal 与 IDE 默认配置");
+                return pass;
+            }
+            catch (Exception ex) { sb.AppendLine("FAIL PS7 默认终端沙箱异常：" + ex.Message); return false; }
             finally { try { Directory.Delete(root, true); } catch { } }
         }
 

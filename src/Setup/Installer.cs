@@ -17,7 +17,7 @@ namespace DiskGuardSetup
     static class SetupProgram
     {
         public const string AppName = "DiskGuard";
-        public const string AppVersion = "9.0.2";
+        public const string AppVersion = "9.0.3";
         public const string PayloadResource = "DiskGuard.payload.zip";
         const string UninstallRegKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\DiskGuard";
         const string RunRegKey = @"Software\Microsoft\Windows\CurrentVersion\Run";

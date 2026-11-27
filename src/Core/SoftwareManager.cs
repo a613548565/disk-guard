@@ -38,6 +38,9 @@ namespace DiskGuard
         public string Pwsh7Path;
         public bool HasWinget;
         public string WingetVersion;
+        public bool HasWindowsTerminal;
+        public bool IsWtDefaultPs7;
+        public string WtSettingsPath;
     }
 
     public static class SoftwareManager
@@ -349,7 +352,207 @@ namespace DiskGuard
             }
             catch { }
 
+            string wtPath = FindWindowsTerminalSettings();
+            if (!string.IsNullOrEmpty(wtPath))
+            {
+                st.HasWindowsTerminal = true;
+                st.WtSettingsPath = wtPath;
+                st.IsWtDefaultPs7 = IsWindowsTerminalDefaultPs7(wtPath);
+            }
+
             return st;
+        }
+
+        public const string WtPs7Guid = "{574e775e-4f2a-5b96-ac1e-a2962a402336}";
+
+        static string FindWindowsTerminalSettings()
+        {
+            string[] wtPaths = new[]
+            {
+                Path.Combine(Util.LocalAppData, "Packages", "Microsoft.WindowsTerminal_8wekyb3d8bbwe", "LocalState", "settings.json"),
+                Path.Combine(Util.LocalAppData, "Packages", "Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe", "LocalState", "settings.json"),
+                Path.Combine(Util.LocalAppData, "Microsoft", "Windows Terminal", "settings.json")
+            };
+            foreach (var p in wtPaths)
+                if (File.Exists(p)) return p;
+            return "";
+        }
+
+        static string DetectPs7GuidInWt(string raw)
+        {
+            if (string.IsNullOrEmpty(raw)) return WtPs7Guid;
+            if (raw.IndexOf(WtPs7Guid, StringComparison.OrdinalIgnoreCase) >= 0) return WtPs7Guid;
+            try
+            {
+                var blocks = System.Text.RegularExpressions.Regex.Matches(raw, @"\{[^{}]*\}");
+                foreach (System.Text.RegularExpressions.Match b in blocks)
+                {
+                    string txt = b.Value;
+                    if (txt.IndexOf("PowershellCore", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                        txt.IndexOf("pwsh.exe", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        var gm = System.Text.RegularExpressions.Regex.Match(txt, @"""guid""\s*:\s*""(\{[^""]+\})""", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        if (gm.Success) return gm.Groups[1].Value;
+                    }
+                }
+            }
+            catch { }
+            return WtPs7Guid;
+        }
+
+        public static bool IsWindowsTerminalDefaultPs7(string settingsPath)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(settingsPath) || !File.Exists(settingsPath)) return false;
+                string raw = File.ReadAllText(settingsPath, Encoding.UTF8);
+                var m = System.Text.RegularExpressions.Regex.Match(raw, @"""defaultProfile""\s*:\s*""([^""]+)""");
+                if (!m.Success) return false;
+                string cur = m.Groups[1].Value.Trim();
+                string ps7 = DetectPs7GuidInWt(raw);
+                return string.Equals(cur, WtPs7Guid, StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(cur, ps7, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        public static bool PatchWindowsTerminalSettingsFile(string settingsPath, out string backupPath, out string err)
+        {
+            backupPath = ""; err = "";
+            try
+            {
+                if (string.IsNullOrEmpty(settingsPath) || !File.Exists(settingsPath))
+                {
+                    err = "未找到 Windows Terminal 配置文件";
+                    return false;
+                }
+                string raw = File.ReadAllText(settingsPath, Encoding.UTF8);
+                string ps7Guid = DetectPs7GuidInWt(raw);
+
+                backupPath = settingsPath + ".bak_dg_" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                File.Copy(settingsPath, backupPath, true);
+
+                var rx = new System.Text.RegularExpressions.Regex(@"(""defaultProfile""\s*:\s*"")[^""]*("")");
+                string updated;
+                if (rx.IsMatch(raw))
+                {
+                    updated = rx.Replace(raw, "$1" + ps7Guid + "$2", 1);
+                }
+                else
+                {
+                    int brace = raw.IndexOf('{');
+                    if (brace < 0) { err = "settings.json 格式异常"; return false; }
+                    updated = raw.Substring(0, brace + 1) + "\r\n    \"defaultProfile\": \"" + ps7Guid + "\"," + raw.Substring(brace + 1);
+                }
+                File.WriteAllText(settingsPath, updated, new UTF8Encoding(false));
+                return true;
+            }
+            catch (Exception ex) { err = ex.Message; return false; }
+        }
+
+        public static bool PatchIdeDefaultPs7(string settingsPath, out string backupPath)
+        {
+            backupPath = "";
+            try
+            {
+                if (string.IsNullOrEmpty(settingsPath) || !File.Exists(settingsPath)) return false;
+                string raw = File.ReadAllText(settingsPath, Encoding.UTF8);
+                backupPath = settingsPath + ".bak_dg_" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                File.Copy(settingsPath, backupPath, true);
+
+                var rx = new System.Text.RegularExpressions.Regex(@"(""terminal\.integrated\.defaultProfile\.windows""\s*:\s*"")[^""]*("")");
+                string updated;
+                if (rx.IsMatch(raw))
+                {
+                    updated = rx.Replace(raw, "$1PowerShell$2", 1);
+                }
+                else
+                {
+                    int brace = raw.IndexOf('{');
+                    if (brace < 0) return false;
+                    string after = raw.Substring(brace + 1);
+                    bool emptyObj = after.Trim().StartsWith("}");
+                    string ins = "\r\n    \"terminal.integrated.defaultProfile.windows\": \"PowerShell\"" + (emptyObj ? "\r\n" : ",");
+                    updated = raw.Substring(0, brace + 1) + ins + after;
+                }
+                File.WriteAllText(settingsPath, updated, new UTF8Encoding(false));
+                return true;
+            }
+            catch { return false; }
+        }
+
+        public static FixResult SetPowerShell7AsDefaultTerminal()
+        {
+            var st = InspectPowerShell();
+            if (!st.HasPwsh7)
+            {
+                return new FixResult
+                {
+                    Ok = false,
+                    Title = "尚未安装 PowerShell 7",
+                    Summary = "请先点击「一键安装 PS 7」，安装完成后再设为默认终端"
+                };
+            }
+
+            var updatedApps = new List<string>();
+            var notes = new List<string>();
+
+            // 1. Windows Terminal（Store 正式版 / 预览版 / 绿色版全部同步）
+            string[] wtPaths = new[]
+            {
+                Path.Combine(Util.LocalAppData, "Packages", "Microsoft.WindowsTerminal_8wekyb3d8bbwe", "LocalState", "settings.json"),
+                Path.Combine(Util.LocalAppData, "Packages", "Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe", "LocalState", "settings.json"),
+                Path.Combine(Util.LocalAppData, "Microsoft", "Windows Terminal", "settings.json")
+            };
+            bool wtDone = false;
+            foreach (var p in wtPaths)
+            {
+                if (!File.Exists(p)) continue;
+                string bak, err;
+                if (PatchWindowsTerminalSettingsFile(p, out bak, out err))
+                {
+                    wtDone = true;
+                }
+                else if (!string.IsNullOrEmpty(err))
+                {
+                    notes.Add("Windows Terminal 写入异常：" + err);
+                }
+            }
+            if (wtDone) updatedApps.Add("Windows Terminal");
+            else notes.Add("未检测到 Windows Terminal 配置文件（请先打开一次系统「终端」应用后再点本按钮）");
+
+            // 2. 自动同步已安装的 VS Code / Cursor 内置终端默认配置（保留原注释与配置并自动备份）
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var ides = new[]
+            {
+                Tuple.Create("VS Code", Path.Combine(appData, "Code", "User", "settings.json")),
+                Tuple.Create("Cursor", Path.Combine(appData, "Cursor", "User", "settings.json"))
+            };
+            foreach (var ide in ides)
+            {
+                if (!File.Exists(ide.Item2)) continue;
+                string bak;
+                if (PatchIdeDefaultPs7(ide.Item2, out bak))
+                    updatedApps.Add(ide.Item1);
+            }
+
+            if (updatedApps.Count == 0)
+            {
+                return new FixResult
+                {
+                    Ok = false,
+                    Title = "未找到可配置的终端软件",
+                    Summary = string.Join("；", notes.ToArray())
+                };
+            }
+
+            return new FixResult
+            {
+                Ok = true,
+                Title = "已将 PowerShell 7 设为默认终端",
+                Summary = "已自动备份原配置并切换：" + string.Join("、", updatedApps.ToArray()) + "（新开终端窗口即默认使用 PowerShell " + st.Pwsh7Version + "，系统内置 5.1 完整保留）",
+                Detail = notes.Count > 0 ? string.Join("；", notes.ToArray()) : ""
+            };
         }
 
         public static FixResult UpgradePowerShell7()

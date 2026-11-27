@@ -24,12 +24,11 @@ namespace DiskGuard
 
     public static class Updater
     {
-        public const string CurrentVersion = "9.0.2";
+        public const string CurrentVersion = "9.0.3";
         public const string CurrentReleaseNotes =
-            "• 彻底升级「桌面图标变白纸」修复引擎：支持自动检测并修复损坏的 .lnk 快捷方式图标指向、定位失靶快捷方式、抗 Win11 explorer 秒级自启锁定的多轮清库 + ie4uinit/SHChangeNotify 强制重绘\n" +
-            "• 默认接入 GitHub Releases 自动更新源并支持 SHA-256 签名自动校验\n" +
-            "• 修复 Docker Desktop 非 C 盘/自定义路径探测（6 级自动探测 + WSL Lxss 注册表识别）\n" +
-            "• 原生 DirectX WPF 单进程架构，常驻内存 ~35 MB";
+            "• PowerShell 7 卡片新增「一键设为默认终端」：自动备份原配置并切换 Windows Terminal 以及已安装的 VS Code / Cursor 默认终端为 PowerShell 7，绝不触碰系统内置 5.1\n" +
+            "• 深度重构「桌面图标变白纸」修复引擎（.lnk 图标路径自动修复 + 失靶诊断 + 抗 Win11 锁定的多轮清库 + ie4uinit/SHChangeNotify 强刷）\n" +
+            "• 默认接入 GitHub Releases 自动更新与 SHA-256 校验，单进程常驻仅 ~35 MB 内存";
 
         public static UpdateInfo Check(string updateSource)
         {
